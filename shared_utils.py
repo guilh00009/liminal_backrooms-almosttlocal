@@ -527,6 +527,178 @@ def call_deepseek_api(prompt, conversation_history, model, system_prompt, stream
         print(f"Error type: {type(e)}")
         return None
 
+def call_lmstudio_api(prompt, conversation_history, model, system_prompt, stream_callback=None):
+    """Call the LM Studio local API for chat completions.
+    
+    LM Studio provides an OpenAI-compatible API at http://localhost:1234/v1 by default.
+    Supports streaming, thinking models (with <think> tags), and tool calling.
+    
+    Args:
+        prompt: The user's prompt / current message
+        conversation_history: List of previous messages
+        model: Model identifier (e.g., "lmstudio/deepseek-r1")
+        system_prompt: System prompt for the AI
+        stream_callback: Optional function(chunk: str) to call with each streaming token
+    
+    Returns:
+        dict or str: Response content, potentially with thinking/reasoning extraction
+    """
+    try:
+        import re
+        from config import SHOW_CHAIN_OF_THOUGHT_IN_CONTEXT
+        
+        # Get LM Studio base URL from environment, default to localhost:1234
+        base_url = os.getenv('LMSTUDIO_BASE_URL', 'http://localhost:1234/v1')
+        
+        # Build messages array
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        
+        # Add conversation history
+        for msg in conversation_history:
+            if isinstance(msg, dict):
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if isinstance(content, str) and content.strip():
+                    messages.append({"role": role, "content": content})
+        
+        # Add current prompt if provided
+        if prompt:
+            messages.append({"role": "user", "content": prompt})
+        
+        headers = {
+            "Content-Type": "application/json",
+        }
+        
+        # Extract model name from format like "lmstudio/deepseek-r1"
+        model_name = model.split('/')[-1] if '/' in model else model
+        
+        payload = {
+            "model": model_name,  # LM Studio uses the loaded model regardless of name
+            "messages": messages,
+            "max_tokens": 8000,
+            "temperature": 1,
+            "stream": stream_callback is not None
+        }
+        
+        print(f"\nSending to LM Studio Local API:")
+        print(f"Base URL: {base_url}")
+        print(f"Model: {model_name}")
+        print(f"Messages: {len(messages)} messages")
+        
+        if stream_callback:
+            # Streaming mode
+            try:
+                response = requests.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=180,
+                    stream=True
+                )
+                
+                if response.status_code == 200:
+                    full_response = ""
+                    for line in response.iter_lines():
+                        if line:
+                            line_text = line.decode('utf-8')
+                            if line_text.startswith('data: '):
+                                json_str = line_text[6:]
+                                if json_str.strip() == '[DONE]':
+                                    break
+                                try:
+                                    chunk_data = json.loads(json_str)
+                                    if 'choices' in chunk_data and len(chunk_data['choices']) > 0:
+                                        delta = chunk_data['choices'][0].get('delta', {})
+                                        content = delta.get('content', '')
+                                        if content:
+                                            full_response += content
+                                            stream_callback(content)
+                                except json.JSONDecodeError:
+                                    continue
+                    response_text = full_response
+                else:
+                    error_msg = f"LM Studio API error {response.status_code}: {response.text}"
+                    print(error_msg)
+                    return None
+            except requests.exceptions.ConnectionError:
+                error_msg = "Failed to connect to LM Studio. Make sure LM Studio is running and the server is started."
+                print(f"\n{error_msg}")
+                return f"Error: {error_msg}"
+            except requests.exceptions.Timeout:
+                error_msg = "Request to LM Studio timed out."
+                print(f"\n{error_msg}")
+                return f"Error: {error_msg}"
+        else:
+            # Non-streaming mode
+            try:
+                response = requests.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=180
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    response_text = data['choices'][0]['message']['content']
+                else:
+                    error_msg = f"LM Studio API error {response.status_code}: {response.text}"
+                    print(error_msg)
+                    return None
+            except requests.exceptions.ConnectionError:
+                error_msg = "Failed to connect to LM Studio. Make sure LM Studio is running and the server is started."
+                print(f"\n{error_msg}")
+                return f"Error: {error_msg}"
+            except requests.exceptions.Timeout:
+                error_msg = "Request to LM Studio timed out."
+                print(f"\n{error_msg}")
+                return f"Error: {error_msg}"
+        
+        print(f"\nRaw Response: {response_text[:500]}...")
+        
+        # Initialize result with content
+        result = {
+            "content": response_text,
+            "model": model
+        }
+        
+        # Extract and format chain of thought for thinking models
+        # (DeepSeek R1, Qwen QwQ, etc. use <think> or <thinking> tags)
+        if SHOW_CHAIN_OF_THOUGHT_IN_CONTEXT:
+            reasoning = None
+            content = response_text
+            
+            if content:
+                # Try both <think> and <thinking> tags
+                think_match = re.search(r'<(think|thinking)>(.*?)</\1>', content, re.DOTALL | re.IGNORECASE)
+                if think_match:
+                    reasoning = think_match.group(2).strip()
+                    content = re.sub(r'<(think|thinking)>.*?</\1>', '', content, flags=re.DOTALL | re.IGNORECASE).strip()
+            
+            display_text = ""
+            if reasoning:
+                display_text += f"[Chain of Thought]\n{reasoning}\n\n"
+            if content:
+                display_text += f"[Final Answer]\n{content}"
+            
+            result["display"] = display_text
+            result["content"] = content
+        else:
+            # Clean up thinking tags from content
+            content = response_text
+            if content:
+                content = re.sub(r'<(think|thinking)>.*?</\1>', '', content, flags=re.DOTALL | re.IGNORECASE).strip()
+                result["content"] = content
+        
+        return result
+        
+    except Exception as e:
+        print(f"Error calling LM Studio API: {e}")
+        print(f"Error type: {type(e)}")
+        return None
+
 def setup_image_directory():
     """Create an 'images' directory in the project root if it doesn't exist"""
     image_dir = Path("images")

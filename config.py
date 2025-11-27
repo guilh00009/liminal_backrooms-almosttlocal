@@ -60,8 +60,15 @@ AI_MODELS = {
     "Sora 2": "sora-2",
     "Sora 2 Pro": "sora-2-pro",
     "Nano Banana Pro": "google/gemini-3-pro-image-preview",
+    # LM Studio (Local) - Start LM Studio server first
+    "LM Studio - DeepSeek R1": "lmstudio/deepseek-r1",
+    "LM Studio - Qwen QwQ": "lmstudio/qwen-qwq",
+    "LM Studio - Llama 3.3": "lmstudio/llama-3.3",
+    "LM Studio - Custom": "lmstudio/custom",
+    # Video Generation (Optional - requires OpenAI API key)
+    # "Sora 2": "sora-2",
+    # "Sora 2 Pro": "sora-2-pro",
 }
-
 # System prompt pairs library
 SYSTEM_PROMPT_PAIRS = {
     # this is a basic system prompt for a conversation between two AIs. Experiment with different prompts to see how they affect the conversation. Add new prompts to the library to use them in the GUI.
